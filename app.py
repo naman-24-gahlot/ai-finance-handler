@@ -1,83 +1,150 @@
 import streamlit as st
 import pandas as pd
-import os
 import plotly.express as px
+import numpy as np
+import json
+from datetime import timedelta
 
-st.set_page_config(page_title="AI Finance Handler", layout="wide")
-
-st.title("💰 AI-Powered Finance Handler")
-st.caption("Local Financial Intelligence • LLM-Augmented • Decision-Oriented")
-
-st.sidebar.header("📂 Financial Directory Scanner")
-
-directory = st.sidebar.text_input(
-    "Enter directory path (cloud demo)",
-    value="/mnt/data"
+# ---------------- CONFIG ----------------
+st.set_page_config(
+    page_title="AI Finance Handler",
+    layout="wide"
 )
 
-def scan_directory(path):
-    files = []
-    for root, _, filenames in os.walk(path):
-        for f in filenames:
-            if f.endswith((".xlsx", ".xls")):
-                files.append(os.path.join(root, f))
-    return files
+st.title("💰 AI Finance Handler")
+st.caption("Upload • Analyze • Forecast • Decide")
 
-def mock_llm_analysis():
+# ---------------- FILE UPLOAD ----------------
+st.sidebar.header("📂 Upload Financial Files")
+
+uploaded_files = st.sidebar.file_uploader(
+    "Upload Excel files",
+    type=["xlsx", "xls"],
+    accept_multiple_files=True
+)
+
+# ---------------- HELPERS ----------------
+def merge_excels(files):
+    dfs = []
+    for f in files:
+        df = pd.read_excel(f)
+        df["source_file"] = f.name
+        dfs.append(df)
+    return pd.concat(dfs, ignore_index=True)
+
+def detect_date_column(df):
+    for col in df.columns:
+        if "date" in col.lower():
+            return col
+    return None
+
+def chunk_dataframe(df, chunk_size=200):
+    return [df.iloc[i:i+chunk_size] for i in range(0, len(df), chunk_size)]
+
+def mock_llm(summary):
     return {
-        "profile": "Software company offering subscription-based cybersecurity solutions.",
+        "company_profile": "The data suggests a subscription-based cybersecurity software company.",
         "insights": [
-            "Revenue peaks during Q3",
-            "R&D costs rising steadily",
-            "Customer churn increasing slightly"
+            "Revenue growth slowing quarter-over-quarter",
+            "Operating expenses increasing faster than revenue",
+            "Customer churn risk emerging"
         ],
         "discrepancies": [
-            "Duplicate invoice detected",
-            "Marketing spend anomaly"
+            "Irregular expense spikes detected",
+            "Duplicate invoice identifiers found"
         ],
         "actions": [
-            "Optimize pricing tiers",
-            "Audit marketing expenses",
-            "Improve retention strategy"
+            "Rebalance operational spending",
+            "Investigate churn causes",
+            "Improve renewal pricing strategy"
         ]
     }
 
-if st.sidebar.button("Scan Files"):
-    files = scan_directory(directory)
+def simple_forecast(series, periods=6):
+    trend = series.rolling(3).mean()
+    last_val = trend.dropna().iloc[-1]
+    return [last_val + i*(last_val*0.02) for i in range(1, periods+1)]
 
-    if not files:
-        st.warning("No Excel files found (cloud demo mode).")
-    else:
-        file = st.selectbox("Select a file", files)
-        df = pd.read_excel(file)
+# ---------------- MAIN ----------------
+if uploaded_files:
+    df = merge_excels(uploaded_files)
 
-        st.subheader("📊 Financial Data")
-        st.dataframe(df)
+    st.subheader("📊 Consolidated Financial Data")
+    st.dataframe(df, use_container_width=True)
 
-        numeric_cols = df.select_dtypes("number").columns
-        if len(numeric_cols):
-            metric = st.selectbox("Metric", numeric_cols)
-            fig = px.line(df, y=metric, title="Time-Based Simulation")
-            st.plotly_chart(fig, use_container_width=True)
+    date_col = detect_date_column(df)
+    numeric_cols = df.select_dtypes(include=np.number).columns
 
-        if st.button("Run LLM Analysis"):
-            res = mock_llm_analysis()
+    # ---------------- VISUALIZATION ----------------
+    st.subheader("📈 Financial Simulation")
 
-            st.subheader("🏢 Company Understanding")
-            st.info(res["profile"])
+    if date_col and len(numeric_cols):
+        metric = st.selectbox("Select Metric", numeric_cols)
+        df[date_col] = pd.to_datetime(df[date_col])
+        df_sorted = df.sort_values(date_col)
 
-            col1, col2 = st.columns(2)
+        fig = px.line(
+            df_sorted,
+            x=date_col,
+            y=metric,
+            title=f"{metric} Over Time"
+        )
+        st.plotly_chart(fig, use_container_width=True)
 
-            with col1:
-                st.subheader("📈 Insights")
-                for i in res["insights"]:
-                    st.write("•", i)
+        # ---------------- FORECAST ----------------
+        st.subheader("🔮 Forecast (Next Periods)")
 
-            with col2:
-                st.subheader("⚠️ Discrepancies")
-                for d in res["discrepancies"]:
-                    st.write("•", d)
+        forecast_vals = simple_forecast(df_sorted[metric])
+        future_dates = [
+            df_sorted[date_col].max() + timedelta(days=30*i)
+            for i in range(1, len(forecast_vals)+1)
+        ]
 
-            st.subheader("✅ Recommended Actions")
-            for a in res["actions"]:
-                st.success(a)
+        forecast_df = pd.DataFrame({
+            "Date": future_dates,
+            "Forecast": forecast_vals
+        })
+
+        forecast_fig = px.line(
+            forecast_df,
+            x="Date",
+            y="Forecast",
+            title="Projected Trend"
+        )
+        st.plotly_chart(forecast_fig, use_container_width=True)
+
+    # ---------------- LLM ANALYSIS ----------------
+    st.subheader("🧠 AI Financial Intelligence")
+
+    if st.button("Run LLM Analysis"):
+        with st.spinner("Analyzing financial structure & patterns..."):
+            summary = {
+                "rows": len(df),
+                "columns": list(df.columns),
+                "stats": df[numeric_cols].describe().to_dict()
+            }
+
+            chunks = chunk_dataframe(df)
+            llm_response = mock_llm(summary)
+
+        st.subheader("🏢 Company Understanding")
+        st.info(llm_response["company_profile"])
+
+        col1, col2 = st.columns(2)
+
+        with col1:
+            st.subheader("📈 Insights")
+            for i in llm_response["insights"]:
+                st.write("•", i)
+
+        with col2:
+            st.subheader("⚠️ Discrepancies")
+            for d in llm_response["discrepancies"]:
+                st.write("•", d)
+
+        st.subheader("✅ Recommended Actions")
+        for a in llm_response["actions"]:
+            st.success(a)
+
+else:
+    st.info("👈 Upload Excel files to begin analysis")
